@@ -6,6 +6,8 @@
 (define-constant err-invalid-quest (err u101))
 (define-constant err-already-completed (err u102))
 (define-constant err-deadline-passed (err u103))
+(define-constant err-invalid-reward (err u104))
+(define-constant err-creator-cannot-complete (err u105))
 
 ;; Data Variables
 (define-data-var quest-nonce uint u0)
@@ -27,22 +29,29 @@
 
 ;; Public Functions
 (define-public (create-quest (title (string-ascii 100)) (duration uint) (reward uint))
-    (let
-        ((quest-id (+ (var-get quest-nonce) u1)))
-        (map-set quests quest-id {
-            creator: tx-sender,
-            title: title,
-            deadline: (+ block-height duration),
-            reward: reward,
-            completed: false
-        })
-        (var-set quest-nonce quest-id)
-        (ok quest-id)
+    (begin
+        (asserts! (> reward u0) err-invalid-reward)
+        (asserts! (>= (stx-get-balance tx-sender) reward) err-invalid-reward)
+        
+        (let ((quest-id (+ (var-get quest-nonce) u1)))
+            (try! (stx-transfer? reward tx-sender (as-contract tx-sender)))
+            
+            (map-set quests quest-id {
+                creator: tx-sender,
+                title: title,
+                deadline: (+ block-height duration),
+                reward: reward,
+                completed: false
+            })
+            (var-set quest-nonce quest-id)
+            (ok quest-id)
+        )
     )
 )
 
 (define-public (complete-quest (quest-id uint))
     (let ((quest (unwrap! (map-get? quests quest-id) err-invalid-quest)))
+        (asserts! (not (is-eq tx-sender (get creator quest))) err-creator-cannot-complete)
         (asserts! (not (get completed quest)) err-already-completed)
         (asserts! (< block-height (get deadline quest)) err-deadline-passed)
         
@@ -62,6 +71,8 @@
          (completion (unwrap! (map-get? completions {quest-id: quest-id, user: tx-sender}) err-invalid-quest)))
         (asserts! (get completed quest) err-invalid-quest)
         (asserts! (not (get reward-claimed completion)) err-already-completed)
+        
+        (try! (as-contract (stx-transfer? (get reward quest) tx-sender tx-sender)))
         
         (map-set completions {quest-id: quest-id, user: tx-sender} 
             (merge completion {reward-claimed: true}))
